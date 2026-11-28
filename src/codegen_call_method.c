@@ -1171,6 +1171,35 @@ int emit_op_method_parameters(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
+/* `instance_method(:sym)` on self (bare or `self.`) at mn, in a class method
+   that takes the class it runs for (`_sp_cls`, cmethod_takes_self_cls): a
+   subclass that runs the method binds its own `sym`. The arms a class value
+   the run hands it picks (cplan_capture_class_arms): the subclasses with a
+   method of the name of their own (its proc form where it yields), other
+   than umi, the defining class's; *ktext the class value's C text. NULL
+   with *na 0 for any other capture. The caller frees the arms. */
+static CplanClassArm *capture_self_cls_arms(Compiler *c, int mn, int umi, const char **ktext, int *na) {
+  const NodeTable *nt = c->nt;
+  *na = 0; *ktext = NULL;
+  if (mn < 0 || !sp_streq(nt_str(nt, mn, "name"), "instance_method") || !method_sym_arg(c, mn)) return NULL;
+  int recv = nt_ref(nt, mn, "receiver");
+  if (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) return NULL;
+  Scope *ss = comp_scope_of(c, mn);
+  if (!ss || !ss->is_cmethod || ss->class_id < 0 || !cmethod_takes_self_cls(c, ss)) return NULL;
+  int sk = ss->class_id, n = 0, kept = 0;
+  CplanClassArm *arms = cplan_capture_class_arms(c, mn, method_sym_arg(c, mn), &n);
+  for (int i = 0; i < n; i++) {
+    if (arms[i].kind != CP_CARM_METHOD || arms[i].mi < 0 || arms[i].cls == sk || !is_descendant(c, arms[i].cls, sk)) continue;
+    int pf = scope_proc_form_of(c, arms[i].mi), ami = pf >= 0 ? pf : arms[i].mi;
+    if (ami == umi || comp_scope_is_private_helper(c, ami)) continue;
+    arms[i].mi = ami;
+    arms[kept++] = arms[i];
+  }
+  if (!kept) { free(arms); return NULL; }
+  *ktext = cmethod_self_cls(c, ss);
+  *na = kept;
+  return arms;
+}
 /* Method#owner (#2701). The creation site knows it: a user target's owner is its
    defining class; a builtin target's owner is the receiver's class. */
 int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
@@ -1192,6 +1221,16 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
     buf_puts(b, "; })");
     return 1;
   }
+  /* a capture on self in a class method a subclass runs too: the Method
+     made at run time names its owner (capture_self_cls_arms) */
+  { int na; const char *kt; CplanClassArm *arms = capture_self_cls_arms(c, mn, target, &kt, &na);
+    if (arms) {
+      free(arms);
+      int tr = ++g_tmp;
+      buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_bm_owner(_t%d); })", tr, tr);
+      return 1;
+    } }
   int is_bam = target >= 0 && c->scopes[target].name &&
                strncmp(c->scopes[target].name, "__bam_", 6) == 0;
   int mrecv = mn >= 0 ? nt_ref(nt, mn, "receiver") : -1;
@@ -1347,6 +1386,10 @@ int emit_op_method_arity(Compiler *c, const BopCtx *x, Buf *b) {
     buf_puts(b, "("); emit_expr(c, recv, b); buf_puts(b, ")->arity");
     return 1;
   }
+  /* (a capture on self in a class method a subclass runs too: the Method
+     made at run time carries its arity, capture_self_cls_arms) */
+  { int na; const char *kt; CplanClassArm *arms = capture_self_cls_arms(c, mn, target, &kt, &na);
+    if (arms) { free(arms); buf_puts(b, "("); emit_expr(c, recv, b); buf_puts(b, ")->arity"); return 1; } }
   /* a builtin-receiver method object: the arity comes from the CRuby table
      keyed on the receiver's class and the literal method name (#2700). Such
      a method() was retargeted at a synthesized __bam_* wrapper, whose params
@@ -2387,32 +2430,49 @@ static void emit_bm_self_keep_close(Compiler *c, int recv, int set_cls, TyKind s
   buf_puts(b, ").cls_id)");
 }
 
+/* The unbound Method object of method umi, as `instance_method(:sym)` at id
+   makes it: the same sp_BoundMethod with a NULL self, so name/arity/owner
+   ride the Method arms; #bind supplies the self (#2676). */
+static void emit_unbound_capture(Compiler *c, int id, int umi, Buf *b) {
+  const char *pp = proc_params_arg(method_proc_params(c, umi));
+  if (pp) buf_puts(b, "sp_bm_set_proc_params(");
+  buf_puts(b, "sp_bm_set_unbound(sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, (sp_int)(uintptr_t)&");
+  buf_puts(b, mc_method(c, &c->scopes[umi]));
+  buf_puts(b, ", ");
+  emit_str_literal(b, method_sym_arg(c, id));
+  { int ar; if (method_scope_arity(c, umi, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
+  buf_puts(b, ", ");
+  emit_method_desc_args(c, id, umi, -1, method_sym_arg(c, id), 1, 0, b);
+  buf_puts(b, ")");
+  { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
+    int _ab = method_legacy_int_abi(c, umi, 0, _s, sizeof _s, &_fx, &_rs, &_rt);
+    int _pa = method_poly_abi(c, umi, 0, &_pf, &_prt);
+    /* an instance method binds at #bind, which stamps the bound thunk */
+    int _tmin = 0, _tmax = 0;
+    const char *_th = c->scopes[umi].is_cmethod ? emit_method_thunk(c, umi, 0, -1, &_tmin, &_tmax) : NULL;
+    emit_bm_abi_args(b, "0", _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
+  buf_puts(b, ")");
+  if (pp) buf_printf(b, ", %s)", pp);
+}
 static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int capture, const char *captured_name) {
-  /* Klass.instance_method(:sym) -> the unbound object: the same
-     sp_BoundMethod with a NULL self, so name/arity/owner ride the Method
-     arms; #bind supplies the self (#2676). */
+  /* Klass.instance_method(:sym) -> the unbound object (emit_unbound_capture) */
   if (sp_streq(name, "instance_method") && method_sym_arg(c, id) != NULL) {
     int umi = capture;
     if (umi >= 0) {
-      const char *pp = proc_params_arg(method_proc_params(c, umi));
-      if (pp) buf_puts(b, "sp_bm_set_proc_params(");
-      buf_puts(b, "sp_bm_set_unbound(sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, (sp_int)(uintptr_t)&");
-      buf_puts(b, mc_method(c, &c->scopes[umi]));
-      buf_puts(b, ", ");
-      emit_str_literal(b, method_sym_arg(c, id));
-      { int ar; if (method_scope_arity(c, umi, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
-      buf_puts(b, ", ");
-      emit_method_desc_args(c, id, umi, -1, method_sym_arg(c, id), 1, 0, b);
-      buf_puts(b, ")");
-      { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
-        int _ab = method_legacy_int_abi(c, umi, 0, _s, sizeof _s, &_fx, &_rs, &_rt);
-        int _pa = method_poly_abi(c, umi, 0, &_pf, &_prt);
-        /* an instance method binds at #bind, which stamps the bound thunk */
-        int _tmin = 0, _tmax = 0;
-        const char *_th = c->scopes[umi].is_cmethod ? emit_method_thunk(c, umi, 0, -1, &_tmin, &_tmax) : NULL;
-        emit_bm_abi_args(b, "0", _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
-      buf_puts(b, ")");
-      if (pp) buf_printf(b, ", %s)", pp);
+      /* self in a class method a subclass runs too: the class the run hands
+         the method (`_sp_cls`) binds its own `sym` where it has one of its
+         own (capture_self_cls_arms), the defining class's otherwise */
+      const char *ktext = NULL;
+      int na = 0;
+      CplanClassArm *arms = capture_self_cls_arms(c, id, umi, &ktext, &na);
+      for (int i = 0; i < na; i++) {
+        buf_printf(b, "(%s.cls_id == %d ? ", ktext, arms[i].cls);
+        emit_unbound_capture(c, id, arms[i].mi, b);
+        buf_puts(b, " : ");
+      }
+      free(arms);
+      emit_unbound_capture(c, id, umi, b);
+      for (int i = 0; i < na; i++) buf_puts(b, ")");
       return 1;
     }
   }

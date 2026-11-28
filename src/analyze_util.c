@@ -5741,6 +5741,15 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
                        ? nt_str(nt, recv, "name") : NULL;
       /* (the class the receiver names: an alias's, a class body's self) */
       k = recv >= 0 && (rn || nt_kind(nt, recv) == NK_SelfNode) ? class_recv_static_ci(c, recv) : -1;
+      /* self in a class method, bare or `self.`: the class, whose copy of a
+         mixin's class method runs there (not a self an instance_eval
+         rebinds); bare in a class body: that class */
+      if (k < 0 && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && ie_class_of(c, node) == -1 &&
+          !(recv >= 0 && (nt_int(nt, recv, "ie_rself", 0) || nt_int(nt, recv, "ie_self", 0)))) {
+        const Scope *ss = comp_scope_of(c, node);
+        if (ss && ss->is_cmethod && ss->class_id >= 0) k = ss->class_id;
+        else if (recv < 0) { int cb = self_class_body(c, node); k = cb >= 0 && cb < c->nclasses && c->classes[cb].name ? cb : -1; }
+      }
       goto found;
     }
   }

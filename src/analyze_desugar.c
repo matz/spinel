@@ -37753,34 +37753,100 @@ static int guarded_include_parts(const NodeTable *nt, int id, int *inc) {
   *inc = st;
   return 1;
 }
+/* Does the subtree under node define `include?`: a def of the name (bare or
+   with a receiver), or a define_method / define_singleton_method with the
+   literal name, anywhere below, under an if or a loop too, but not in a
+   nested class or module body (whose own defs are theirs) */
+static int guarded_include_defines_deep(const NodeTable *nt, int node, int depth) {
+  if (node < 0 || depth > 64) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (depth && (k == NK_ClassNode || k == NK_ModuleNode)) return 0;
+  if (k == NK_DefNode) return nt_str(nt, node, "name") && sp_streq(nt_str(nt, node, "name"), "include?");
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, node, "name");
+    if (nm && (sp_streq(nm, "define_method") || sp_streq(nm, "define_singleton_method"))) {
+      int an = 0; const int *av = nt_arr(nt, nt_ref(nt, node, "arguments"), "arguments", &an);
+      const char *lit = an >= 1 ? vis_arg_name(nt, av[0]) : NULL;
+      if (lit && sp_streq(lit, "include?")) return 1;
+    }
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (guarded_include_defines_deep(nt, nt_ref_at(nt, node, i), depth + 1)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++) if (guarded_include_defines_deep(nt, ids[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+/* Is `name` among the n names? */
+static int guarded_include_named(const char *const *names, int n, const char *name) {
+  for (int i = 0; i < n; i++) if (sp_streq(names[i], name)) return 1;
+  return 0;
+}
 /* Does a module the program extends a class or module with (`extend Policy`,
-   `K.extend Policy`) define `include?` as an instance method? The class's
-   singleton gains it, and a class body's bare `include?` asks it. */
+   `K.extend Policy`), or a module such a module includes, define `include?`
+   as an instance method? The class's singleton gains it, and a class body's
+   bare `include?` asks it. Modules by their last name. */
 static int guarded_include_extended_answers(const NodeTable *nt) {
-  NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
-    if (!cb_body_defs(nt, class_def_body(nt, m), "include?")) continue;
-    const char *mn = class_def_name(nt, m);
-    if (!mn) continue;
-    NT_FOREACH_KIND(nt, NK_CallNode, s) {
-      const char *nm = nt_str(nt, s, "name");
-      int r = nt_ref(nt, s, "receiver");
-      if (!nm || !sp_streq(nm, "extend") || (r >= 0 && !nt_kind_is_constant(nt_kind(nt, r)) && nt_kind(nt, r) != NK_SelfNode)) continue;
-      int an = 0; const int *av = nt_arr(nt, nt_ref(nt, s, "arguments"), "arguments", &an);
-      for (int a = 0; a < an; a++) {
-        const char *cn = nt_kind_is_constant(nt_kind(nt, av[a])) ? nt_str(nt, av[a], "name") : NULL;
-        if (cn && sp_streq(cn, mn)) return 1;
+  enum { CAP = 4096 };
+  const char *names[CAP]; int n = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, s) {
+    const char *nm = nt_str(nt, s, "name");
+    int r = nt_ref(nt, s, "receiver");
+    if (!nm || !sp_streq(nm, "extend") || (r >= 0 && !nt_kind_is_constant(nt_kind(nt, r)) && nt_kind(nt, r) != NK_SelfNode)) continue;
+    int an = 0; const int *av = nt_arr(nt, nt_ref(nt, s, "arguments"), "arguments", &an);
+    for (int a = 0; a < an && n < CAP; a++) {
+      const char *cn = nt_kind_is_constant(nt_kind(nt, av[a])) ? nt_str(nt, av[a], "name") : NULL;
+      if (cn && !guarded_include_named(names, n, cn)) names[n++] = cn;
+    }
+  }
+  /* the modules those include, and theirs, to a fixpoint */
+  for (int grew = 1; grew && n < CAP;) {
+    grew = 0;
+    NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
+      const char *mn = class_def_name(nt, m);
+      if (!mn || !guarded_include_named(names, n, mn)) continue;
+      int bn = 0; const int *bb = nt_arr(nt, class_def_body(nt, m), "body", &bn);
+      for (int j = 0; j < bn; j++) {
+        const char *sn = nt_kind(nt, bb[j]) == NK_CallNode && nt_ref(nt, bb[j], "receiver") < 0 ? nt_str(nt, bb[j], "name") : NULL;
+        if (!sn || (!sp_streq(sn, "include") && !sp_streq(sn, "prepend"))) continue;
+        int an = 0; const int *av = nt_arr(nt, nt_ref(nt, bb[j], "arguments"), "arguments", &an);
+        for (int a = 0; a < an && n < CAP; a++) {
+          const char *cn = nt_kind_is_constant(nt_kind(nt, av[a])) ? nt_str(nt, av[a], "name") : NULL;
+          if (cn && !guarded_include_named(names, n, cn)) { names[n++] = cn; grew = 1; }
+        }
       }
     }
+  }
+  if (!n) return 0;
+  NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
+    const char *mn = class_def_name(nt, m);
+    if (mn && guarded_include_named(names, n, mn) && guarded_include_defines_deep(nt, class_def_body(nt, m), 0)) return 1;
   }
   return 0;
 }
 /* Not where the program answers `include?` itself -- a `def self.include?`,
-   a singleton class's, a reopened Module's or Class's, or an instance
-   method of a module the program extends something with: the guard asks
-   that method, and its answer decides (test/include_guarded_by_own_include_p.rb). */
+   a singleton class's (under an if or a loop in it too), a define_method or
+   define_singleton_method of the literal name, a reopened Module's or
+   Class's, or an instance method of a module the program extends something
+   with (or of a module such a module includes): the guard asks that method,
+   and its answer decides (test/include_guarded_by_own_include_p.rb,
+   test/include_guarded_by_extended_include_p.rb). */
 int desugar_guarded_include_gate(Compiler *c, LowerCtx *lc) {
   (void)lc;
-  return !cb_program_defines(c->nt, "include?", NULL) && !guarded_include_extended_answers(c->nt);
+  const NodeTable *nt = c->nt;
+  if (cb_program_defines(nt, "include?", NULL) || guarded_include_extended_answers(nt)) return 0;
+  NT_FOREACH_KIND(nt, NK_SingletonClassNode, sc)
+    if (guarded_include_defines_deep(nt, nt_ref(nt, sc, "body"), 0)) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, s) {
+    const char *nm = nt_str(nt, s, "name");
+    if (!nm || !sp_streq(nm, "define_singleton_method")) continue;
+    int an = 0; const int *av = nt_arr(nt, nt_ref(nt, s, "arguments"), "arguments", &an);
+    const char *lit = an >= 1 ? vis_arg_name(nt, av[0]) : NULL;
+    if (lit && sp_streq(lit, "include?")) return 0;
+  }
+  return 1;
 }
 /* the shape as a statement (one of a statement list: a body's, a block's, a
    def's): its value is nil where the guard skips the include, and a value

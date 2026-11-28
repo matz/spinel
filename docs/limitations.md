@@ -916,16 +916,16 @@ the member:
   membership, and the exact moment a `Thread#raise`/`#kill` is delivered) is
   nondeterministic, where the single-worker model was deterministic.
   `Thread#raise` targeting the **main** thread is delivered at main's next
-  wait (a `sleep`, a `Queue#pop`, a `join`, a `Mutex#lock`, an IO wait) or
-  `Thread.pass`, not in the middle of a computation as CRuby can;
-  `Thread#kill` of the main thread is a no-op, where CRuby ends the process.
-  An `exit` or `abort` that ends another thread reaches main the same way, so
-  a main that computes to its end without a wait finishes first, and the
-  program exits with main's status. With `SPINEL_WORKERS=1` main shares its
-  worker with the other threads, and such an `exit` can reach it during a
-  computation, as in CRuby. Main holds one raise until its next wait: a later
-  one replaces it, except that a waiting `exit` stays and the later one is
-  dropped, where CRuby raises each in turn.
+  wait (a `sleep`, a `Queue#pop`, a `join`, a `Mutex#lock`, an IO wait),
+  `Thread.pass` or safe point (a loop iteration): a main that
+  runs is asked to its next safe point when the raise is queued, as the
+  monitor asks it past a quantum, where CRuby raises at the thread's next
+  check. A raise from a `Signal.trap` proc, which the threaded runtime runs
+  on a thread of its own, reaches main the same way. `Thread#kill` of the
+  main thread is a no-op, where CRuby ends the process. An `exit` or `abort`
+  that ends another thread reaches main the same way. Main holds one raise
+  until it takes it: a later one replaces it, except that a waiting `exit`
+  stays and the later one is dropped, where CRuby raises each in turn.
 - **An `--incremental` build is slower code than a release build.** It is a
   development-build mode: the program is compiled as many units, so methods
   are not inlined across units, and short methods lose the inline hint they

@@ -2480,10 +2480,13 @@ else {                                        /* macOS: "<idx> <image> <addr> <s
      gave a piece it split off the function or a copy it specialized
      (`sp_Foo_s_bar.cold.1` for clang's outlined cold path, `.cold`, `.part.0`,
      `.isra.0`, `.constprop.0` for gcc's), which is still that method's frame.
-     A cold piece clang outlines is a function of its own, called from the
-     method, so the method's frame follows it; the caller drops that one. */
+     Only clang's numbered `.cold.<N>` is a function of its own that the method
+     calls, so the method's frame follows it and the caller drops that one.
+     gcc's bare `.cold` is the same function's cold blocks placed in another
+     section: no call, no extra frame, and the frame below it can be a real
+     recursive caller, which must stay. */
   char *dot = strchr(sym, '.');
-  if (cold) *cold = dot && strncmp(dot, ".cold", 5) == 0;
+  if (cold) *cold = dot && strncmp(dot, ".cold.", 6) == 0 && dot[6] >= '0' && dot[6] <= '9';
   if (dot) *dot = 0;
   if (raw && rawcap) snprintf(raw, rawcap, "%s", sym);
   /* The top level runs in the emitted body function, which the compiler
@@ -2675,8 +2678,9 @@ sp_StrArray *sp_bt_format(void **buf, int n) {
     char raw[256]; raw[0] = 0;
     int cold = 0;
     char *name = (char *)sp_bt_symbol(syms[i], raw, sizeof raw, &cold);  /* always strdup'd; free after use */
-    /* the method's own frame under the cold piece it called names the same
-       Ruby frame again: the piece's frame stands for it, at the raising line */
+    /* the method's own frame under the outlined cold piece it called names
+       the same Ruby frame again: the piece's frame stands for it, at the
+       raising line (a bare gcc `.cold` is not flagged, see sp_bt_symbol) */
     int again = name && prev_cold && !cold && strcmp(raw, prev) == 0;
     snprintf(prev, sizeof prev, "%s", raw);
     prev_cold = name ? cold : 0;

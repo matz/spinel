@@ -848,8 +848,22 @@ int object_fallback_class_of_type(TyKind t) {
 }
 
 /* The class constant local read `v` holds when every write of that local
-   in the program assigns that one constant (`q = Module.new do ... end`, by
-   now a read of the module the call defines); NULL otherwise. */
+   in the program that can hold a class assigns that one constant
+   (`q = Module.new do ... end`, by now a read of the module the call
+   defines); NULL otherwise. A write of a literal that is no class (`q = 7
+   if flag`, a program's dead branch) names no other class: where it ran,
+   the constant written from q would hold no module, and its include would
+   be CRuby's TypeError, not another module's methods. */
+static int local_write_no_class(const NodeTable *nt, int wv) {
+  if (wv < 0) return 0;
+  switch (nt_kind(nt, wv)) {
+  case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_SymbolNode: case NK_NilNode:
+  case NK_TrueNode: case NK_FalseNode: case NK_ArrayNode: case NK_HashNode: case NK_RangeNode:
+  case NK_InterpolatedStringNode: case NK_RegularExpressionNode:
+    return 1;
+  default: return 0;
+  }
+}
 static const char *local_holds_class(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   const char *ln = nt_str(nt, v, "name"), *held = NULL;
@@ -861,6 +875,7 @@ static const char *local_holds_class(Compiler *c, int v) {
       const char *wn = nt_str(nt, w, "name");
       if (!wn || !sp_streq(wn, ln)) continue;
       int wv = WK[k] == NK_LocalVariableWriteNode ? nt_ref(nt, w, "value") : -1;
+      if (WK[k] == NK_LocalVariableWriteNode && local_write_no_class(nt, wv)) continue;
       const char *vn = wv >= 0 && nt_kind(nt, wv) == NK_ConstantReadNode ? nt_str(nt, wv, "name") : NULL;
       if (!vn || const_node_class_index(c, wv) < 0 || (held && !sp_streq(held, vn))) return NULL;
       held = vn;

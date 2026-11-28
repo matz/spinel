@@ -83,6 +83,20 @@ Dir.mktmpdir do |d|
   pid = spawn("sh", "-c", "echo o; echo t >&3", [1, 3] => [File.join(d, "log.txt"), "w"])
   Process.wait(pid)
   p File.read(File.join(d, "log.txt"))
+  # a path with no mode is opened to read, for a group with a member past 2
+  # and for `[path]` on a standard stream: the file stays as it is
+  File.write(File.join(d, "keep.txt"), "keep\n")
+  pid = spawn("sh", "-c", "cat <&3", [1, 3] => File.join(d, "keep.txt"), err: File::NULL)
+  Process.wait(pid)
+  pid = spawn("true", out: [File.join(d, "keep.txt")])
+  Process.wait(pid)
+  p File.read(File.join(d, "keep.txt"))
+  # an IO in a group names its descriptor
+  File.open(File.join(d, "io.txt"), "w") do |f|
+    pid = spawn("sh", "-c", "echo o; echo t >&3", [$stdout, 3] => f)
+    Process.wait(pid)
+  end
+  p File.read(File.join(d, "io.txt"))
   # [:child, n] is the descriptor as the options make it, whatever their order
   File.open(File.join(d, "a.txt"), "w") do |f|
     pid = spawn("sh", "-c", "echo x >&3", 3 => [:child, f.fileno], f.fileno => [File.join(d, "b.txt"), "w"])
@@ -183,7 +197,8 @@ rescue SystemCallError => e
 end
 
 # a number that is no descriptor: past a C int, or negative
-[{ 3 => 0x100000001 }, { 0x100000001 => 1 }, { -1 => 1 }, { 3 => [:child, 0x100000001] }].each do |opts|
+[{ 3 => 0x100000001 }, { 0x100000001 => 1 }, { -1 => 1 }, { 3 => [:child, 0x100000001] },
+ { [1, 3] => 0x100000001 }].each do |opts|
   begin
     spawn("true", opts)
   rescue RangeError, ArgumentError => e

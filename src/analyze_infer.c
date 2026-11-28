@@ -12569,9 +12569,12 @@ TyKind infer_uncached(Compiler *c, int id) {
     /* a constant whose slot is an sp_String * handle reads as a String */
     if (lv && repr_slot_kind(c, lv) == RK_STRBUF) return TY_STRING;
     if (lv && lv->type != TY_UNKNOWN) return lv->type;
-    /* `include Math` exposes bare PI/E as Float constants (#2600) */
-    if (c->has_include_math && !lv && nm && (sp_streq(nm, "PI") || sp_streq(nm, "E")))
-      return TY_FLOAT;
+    /* `include Math` exposes bare PI/E as Float constants (#2600): a fact
+       of the whole program, read for the memo as one */
+    if (!lv && nm && (sp_streq(nm, "PI") || sp_streq(nm, "E"))) {
+      IMEMO_DEP_GLOBAL();
+      if (c->has_include_math) return TY_FLOAT;
+    }
     if (is_engine_string_const(nm)) return TY_STRING;
     if (nm && sp_streq(nm, "RUBY_PATCHLEVEL")) return TY_INT;
     if (nm && sp_streq(nm, "ARGV")) return TY_STR_ARRAY;

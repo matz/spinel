@@ -14641,7 +14641,10 @@ int desugar_include_math(Compiler *c) {
     }
   }
   if (!has_include) return 0;
-  c->has_include_math = 1;
+  /* (a fact of the whole program: a bare PI or E typed before it was known
+     was typed unknown, and the memo's answers that read it go with the
+     program's version) */
+  if (!c->has_include_math) { c->has_include_math = 1; comp_touch_global(); }
   int changed = 0;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;

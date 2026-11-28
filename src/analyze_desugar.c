@@ -37762,11 +37762,16 @@ int desugar_guarded_include_gate(Compiler *c, LowerCtx *lc) {
 }
 /* the shape as a statement (one of a statement list: a body's, a block's, a
    def's): its value is nil where the guard skips the include, and a value
-   read (`r = (include M unless include?(M))`, an argument) keeps the guard */
+   read (`r = (include M unless include?(M))`, whose parentheses hold a
+   statement list of their own, an argument) keeps the guard. Not in a
+   `class << self` body: the guard asks the singleton class there, which the
+   hoist of that body turns into an extend of the class. */
 static int guarded_include_stmt(Compiler *c, LowerCtx *lc, int id) {
   const int *par = lower_parents(c, lc);
   int p = par ? par[id] : -1;
-  return p >= 0 && nt_kind(c->nt, p) == NK_StatementsNode;
+  if (p < 0 || nt_kind(c->nt, p) != NK_StatementsNode) return 0;
+  int pp = par[p];
+  return pp < 0 || (nt_kind(c->nt, pp) != NK_ParenthesesNode && nt_kind(c->nt, pp) != NK_SingletonClassNode);
 }
 int desugar_guarded_include_left(Compiler *c, LowerCtx *lc, int id) {
   int inc;

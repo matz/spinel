@@ -16141,11 +16141,14 @@ static TyKind bs_join(TyKind a, TyKind b) {
 /* What value `v` binds as. An empty `[]` / `{}` literal, or a bare
    `Array.new` / `Hash.new`, has no type of its
    own but is still built as a container, so it is not the Integer an
-   unpinned parameter defaults to (#4295): poly holds either. */
+   unpinned parameter defaults to (#4295): poly holds either. A value that
+   never arrives (void: a call that raises before the block runs, a pruned
+   method's body) binds nothing, so it says nothing of the parameter. */
 static TyKind bs_value(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   TyKind t = v >= 0 ? infer_type(c, v) : TY_NIL;
   if (t == TY_UNKNOWN && node_is_empty_container(c, v)) t = TY_POLY;
+  if (t == TY_VOID) t = TY_UNKNOWN;
   return t;
 }
 

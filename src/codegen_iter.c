@@ -1541,9 +1541,10 @@ static void emit_block_arg_coerced(Compiler *c, int node, TyKind ot, Buf *b) {
   else if (nk == NK_NilNode && oint_kind(ot)) buf_puts(b, oint_nil(ot));
   else if (nk == NK_NilNode && (ot == TY_SYMBOL || ot == TY_CLASS)) buf_puts(b, default_value(ot));
   /* an untyped value (a call no class answers, which raises NoMethodError
-     before it binds anything) into a typed parameter: the raise, and the
+     before it binds anything) or a void one (a call that raises, as a
+     pruned method's body does) into a typed parameter: the raise, and the
      slot's own value after it, as any typed store takes it */
-  else if (at == TY_UNKNOWN && !empty_lit && ot != TY_POLY && ot != TY_UNKNOWN && ot != TY_VOID)
+  else if ((at == TY_UNKNOWN || at == TY_VOID) && !empty_lit && ot != TY_POLY && ot != TY_UNKNOWN && ot != TY_VOID)
     emit_unresolved_coerced(c, node, ot, b);
   /* and so is a boxed nil: under --int-overflow=promote an Integer slot
      that can hold nil (an ivar, a local, a method's parameter) is widened
